@@ -23,10 +23,11 @@ class Combat1DEnv(gym.Env):
         
         # Action costs and effects
         self.actions_config = {
-            0: {"name": "left", "mana": 0, "range": 0, "damage": 0},
-            1: {"name": "right", "mana": 0, "range": 0, "damage": 0},
-            2: {"name": "attack_short", "mana": 10, "range": 10, "damage": 15},
-            3: {"name": "attack_long", "mana": 25, "range": 50, "damage": 10},
+            0: {"name": "left", "mana": 5, "range": 0, "damage": 0},
+            1: {"name": "right", "mana": 5, "range": 0, "damage": 0},
+            2: {"name": "attack_short", "mana": 10, "range": 3, "damage": 15},
+            3: {"name": "attack_long", "mana": 25, "range": 10, "damage": 10},
+            4: {"name": "rest", "mana": 0, "range": 0, "damage": 0}
         }
         
         # Action and observation spaces
@@ -136,9 +137,9 @@ class Combat1DEnv(gym.Env):
             return reward - 5  # Penalty for invalid action
         
         # Execute action
-        if action == 0:  # Left
+        if action == 0 and mana >= 5:  # Left
             pos = (pos - self.move_speed) % self.strip_length
-        elif action == 1:  # Right
+        elif action == 1 and mana >= 5:  # Right
             pos = (pos + self.move_speed) % self.strip_length
         elif action in [2, 3]:  # Attacks
             distance = self._get_cyclic_distance(pos, opp_pos)
@@ -155,7 +156,7 @@ class Combat1DEnv(gym.Env):
                 # Miss
                 reward -= 5  # Penalty for missing
             
-            mana -= action_config["mana"]
+        mana -= action_config["mana"]
         
         # Update player state
         if player == 1:

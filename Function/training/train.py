@@ -159,8 +159,10 @@ def plot_training_progress(rewards_p1, rewards_p2, wins_p1, wins_p2, episode):
         axes[1].grid(True, alpha=0.3)
         axes[1].set_ylim([0, 100])
     
+    os.makedirs('training_progress', exist_ok=True)
+
     plt.tight_layout()
-    plt.savefig(f'training_progress_ep{episode}.png', dpi=100)
+    plt.savefig(f'training_progress/training_progress_ep{episode}.png', dpi=100)
     plt.close()
 
 

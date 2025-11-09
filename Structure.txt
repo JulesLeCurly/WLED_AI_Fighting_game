@@ -28,7 +28,8 @@ WLED_AI_Fighting_game/
 │   │   └── wled_interface.py       # Interface WLED (à créer)
 │
 ├── models/                      # Modèles sauvegardés
-│   └── .gitkeep
+│
+├── training_progress/ #plot of progression
 │
 ├── .gitignore                   # .gitignore (déjà fait ✓)
 ├── Main.py                      # Point d'entrée principal (à créer)
