@@ -2,18 +2,6 @@
 
 Two AI agents learn to fight each other in a 1D cyclic world, designed for WLED LED strip visualization.
 
-## Project Structure
-
-```
-1d-combat-rl/
-├── game_env.py          # Game environment (Gymnasium compatible)
-├── dqn_agent.py         # Deep Q-Network agent implementation
-├── train.py             # Training script
-├── visualizer.py        # Real-time visualization
-├── requirements.txt     # Python dependencies
-└── models/              # Saved agent models (created during training)
-```
-
 ## Installation
 
 ### Requirements
