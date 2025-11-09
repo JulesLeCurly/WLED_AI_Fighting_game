@@ -1,6 +1,6 @@
 import numpy as np
-from Function.game_env import Combat1DEnv
-from Function.dqn_agent import DQNAgent
+from Function.core.game_env import Combat1DEnv
+from Function.agents.dqn_agent import DQNAgent
 import matplotlib.pyplot as plt
 from collections import deque
 import os

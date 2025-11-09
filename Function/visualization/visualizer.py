@@ -2,8 +2,8 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.patches import Rectangle
 import numpy as np
-from Function.game_env import Combat1DEnv
-from Function.dqn_agent import DQNAgent
+from Function.core.game_env import Combat1DEnv
+from Function.agents.dqn_agent import DQNAgent
 
 class GameVisualizer:
     """Real-time visualization of the game"""
