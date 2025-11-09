@@ -11,6 +11,8 @@ def main():
                         help='Mode: train agents, visualize gameplay, or test environment')
     parser.add_argument('--episodes', type=int, default=5000,
                         help='Number of training episodes (default: 5000)')
+    parser.add_argument('--max-steps-per-episode', type=int, default=300,
+                        help='Maximum number of steps per episode (default: 300)')
     parser.add_argument('--games', type=int, default=3,
                         help='Number of games to visualize (default: 3)')
     parser.add_argument('--agent1', type=str, default='models/agent1_final.pth',
@@ -23,7 +25,7 @@ def main():
     if args.mode == 'train':
         print("Starting training mode...")
         from Function.training.train import train_agents
-        train_agents(num_episodes=args.episodes)
+        train_agents(num_episodes=args.episodes, max_steps_per_episode=args.max_steps_per_episode)
         
     elif args.mode == 'visualize':
         print("Starting visualization mode...")

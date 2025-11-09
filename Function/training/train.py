@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from collections import deque
 import os
 
-def train_agents(num_episodes=5000, save_interval=500, visualize_interval=100):
+def train_agents(num_episodes=5000, max_steps_per_episode=300, save_interval=500, visualize_interval=100):
     """Train two DQN agents to fight each other"""
     
     # Create environment
@@ -39,6 +39,7 @@ def train_agents(num_episodes=5000, save_interval=500, visualize_interval=100):
         total_reward_p2 = 0
         done = False
         
+        Total_steps = 0
         while not done:
             # Select actions
             action_p1 = agent1.select_action(obs_p1, training=True)
@@ -62,6 +63,10 @@ def train_agents(num_episodes=5000, save_interval=500, visualize_interval=100):
             
             total_reward_p1 += reward_p1
             total_reward_p2 += reward_p2
+
+            if Total_steps >= max_steps_per_episode:
+                break
+            Total_steps += 1
         
         # Record statistics
         episode_rewards_p1.append(total_reward_p1)
@@ -95,6 +100,7 @@ def train_agents(num_episodes=5000, save_interval=500, visualize_interval=100):
             p2_winrate = np.mean(p2_wins) * 100
             
             print(f"Episode {episode:4d} | "
+                  f"Total Steps: {Total_steps} | "
                   f"P1 Reward: {avg_reward_p1:7.2f} | "
                   f"P2 Reward: {avg_reward_p2:7.2f} | "
                   f"P1 WR: {p1_winrate:5.1f}% | "
