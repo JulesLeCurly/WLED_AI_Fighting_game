@@ -31,7 +31,7 @@ class Combat1DEnv(gym.Env):
         }
         
         # Action and observation spaces
-        self.action_space = spaces.Discrete(4)
+        self.action_space = spaces.Discrete(len(self.actions_config))
         
         # Observation: [distance, direction, my_hp, my_mana, opp_hp, opp_mana]
         self.observation_space = spaces.Box(
@@ -111,13 +111,14 @@ class Combat1DEnv(gym.Env):
         direction = self._get_direction(my_pos, opp_pos)
         
         return np.array([
-            distance,
+            distance / self.strip_length,
             direction,
-            my_hp,
-            my_mana,
-            opp_hp,
-            opp_mana
+            my_hp / self.max_hp,
+            my_mana / self.max_mana,
+            opp_hp / self.max_hp,
+            opp_mana / self.max_mana
         ], dtype=np.float32)
+        
     
     def _execute_action(self, player, action):
         """Execute action for a player and return reward"""
@@ -178,6 +179,8 @@ class Combat1DEnv(gym.Env):
         action_p1, action_p2 = actions
         
         # Execute actions
+        prev_p1_hp, prev_p2_hp = self.p1_hp, self.p2_hp
+
         reward_p1 = self._execute_action(1, action_p1)
         reward_p2 = self._execute_action(2, action_p2)
         
@@ -186,10 +189,12 @@ class Combat1DEnv(gym.Env):
         self.p2_mana = min(self.max_mana, self.p2_mana + self.mana_regen)
         
         # Check damage rewards
-        if self.p2_hp < self.max_hp:
-            reward_p1 += (self.max_hp - self.p2_hp) * 0.1
-        if self.p1_hp < self.max_hp:
-            reward_p2 += (self.max_hp - self.p1_hp) * 0.1
+        damage_done_p1 = prev_p2_hp - self.p2_hp
+        damage_done_p2 = prev_p1_hp - self.p1_hp
+
+        reward_p1 += damage_done_p1 * 1.0  # proportionnel au dégât infligé
+        reward_p2 += damage_done_p2 * 1.0
+
         
         self.current_step += 1
         
@@ -217,7 +222,7 @@ class Combat1DEnv(gym.Env):
         obs_p1 = self._get_observation(player=1)
         obs_p2 = self._get_observation(player=2)
         
-        truncated = False
+        truncated = self.current_step >= self.max_steps
         info = self._get_info()
         
         return (obs_p1, obs_p2), (reward_p1, reward_p2), terminated, truncated, info
