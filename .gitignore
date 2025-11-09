@@ -1,0 +1,2 @@
+# Ignorer les dossiers __pycache__ partout
+__pycache__/
