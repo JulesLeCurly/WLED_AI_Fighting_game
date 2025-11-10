@@ -33,10 +33,11 @@ class Combat1DEnv(gym.Env):
         # Action and observation spaces
         self.action_space = spaces.Discrete(len(self.actions_config))
         
-        # Observation: [distance, direction, my_hp, my_mana, opp_hp, opp_mana]
+        # FIXED: Observation space now matches normalized values
+        # [distance_norm, direction, my_hp_norm, my_mana_norm, opp_hp_norm, opp_mana_norm]
         self.observation_space = spaces.Box(
-            low=np.array([0, -1, 0, 0, 0, 0]),
-            high=np.array([150, 1, 100, 100, 100, 100]),
+            low=np.array([0.0, -1.0, 0.0, 0.0, 0.0, 0.0]),
+            high=np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
             dtype=np.float32
         )
         
@@ -45,9 +46,16 @@ class Combat1DEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         
-        # Initialize player positions
-        self.p1_pos = 75.0
-        self.p2_pos = 225.0
+        # FIXED: Random spawn positions (minimum distance = 50 pixels)
+        self.p1_pos = float(self.np_random.integers(0, self.strip_length))
+        
+        # Ensure minimum distance between players
+        min_distance = 50
+        while True:
+            self.p2_pos = float(self.np_random.integers(0, self.strip_length))
+            distance = self._get_cyclic_distance(self.p1_pos, self.p2_pos)
+            if distance >= min_distance:
+                break
         
         # Initialize stats
         self.p1_hp = self.max_hp
@@ -110,6 +118,7 @@ class Combat1DEnv(gym.Env):
         distance = self._get_cyclic_distance(my_pos, opp_pos)
         direction = self._get_direction(my_pos, opp_pos)
         
+        # Normalized observation (all values 0-1)
         return np.array([
             distance / self.strip_length,
             direction,
@@ -180,6 +189,7 @@ class Combat1DEnv(gym.Env):
         
         # Execute actions
         prev_p1_hp, prev_p2_hp = self.p1_hp, self.p2_hp
+        prev_p1_pos, prev_p2_pos = self.p1_pos, self.p2_pos
 
         reward_p1 = self._execute_action(1, action_p1)
         reward_p2 = self._execute_action(2, action_p2)
@@ -192,8 +202,17 @@ class Combat1DEnv(gym.Env):
         damage_done_p1 = prev_p2_hp - self.p2_hp
         damage_done_p2 = prev_p1_hp - self.p1_hp
 
-        reward_p1 += damage_done_p1 * 1.0  # proportionnel au dégât infligé
+        reward_p1 += damage_done_p1 * 1.0  # proportional to damage dealt
         reward_p2 += damage_done_p2 * 1.0
+
+        prev_distance = self._get_cyclic_distance(prev_p1_pos, prev_p2_pos)
+        new_distance = self._get_cyclic_distance(self.p1_pos, self.p2_pos)
+
+        if new_distance == 0:
+            reward_p1 -= 4
+            reward_p2 -= 4
+
+        reward_p1 += (prev_distance - new_distance) * 0.1  # bonus si rapprochement
 
         
         self.current_step += 1
@@ -242,36 +261,45 @@ class Combat1DEnv(gym.Env):
         }
     
     def render(self):
-        """Return LED strip state for visualization"""
-        strip = np.zeros((self.strip_length, 3))
+        """
+        Return LED strip state for visualization
+        FIXED: Integer positions only, automatic attack direction
+        """
+        strip = np.zeros((self.strip_length, 3), dtype=np.uint8)
+        
+        # Convert float positions to integers
+        p1_idx = int(round(self.p1_pos)) % self.strip_length
+        p2_idx = int(round(self.p2_pos)) % self.strip_length
         
         # Player 1 (Red)
-        p1_idx = int(self.p1_pos) % self.strip_length
         strip[p1_idx] = [255, 0, 0]
         
         # Player 2 (Blue)
-        p2_idx = int(self.p2_pos) % self.strip_length
         strip[p2_idx] = [0, 0, 255]
         
-        # Attack visualizations
-        if self.p1_last_action == 2:  # Short attack
-            for i in range(1, 11):
-                idx = (p1_idx + i) % self.strip_length
-                strip[idx] = [255, 255, 255]
-        elif self.p1_last_action == 3:  # Long attack
+        # Attack visualizations - FIXED: Automatic direction toward opponent
+        if self.p1_last_action == 2:  # P1 Short attack
             direction = self._get_direction(self.p1_pos, self.p2_pos)
-            for i in range(1, 51):
-                idx = (p1_idx + i * direction) % self.strip_length
+            for i in range(1, 4):  # range = 3 pixels
+                idx = (p1_idx + int(i * direction)) % self.strip_length
+                strip[idx] = [255, 255, 255]
+                
+        elif self.p1_last_action == 3:  # P1 Long attack
+            direction = self._get_direction(self.p1_pos, self.p2_pos)
+            for i in range(1, 11):  # range = 10 pixels
+                idx = (p1_idx + int(i * direction)) % self.strip_length
                 strip[idx] = [255, 255, 0]
         
-        if self.p2_last_action == 2:
-            for i in range(1, 11):
-                idx = (p2_idx + i) % self.strip_length
-                strip[idx] = [255, 255, 255]
-        elif self.p2_last_action == 3:
+        if self.p2_last_action == 2:  # P2 Short attack
             direction = self._get_direction(self.p2_pos, self.p1_pos)
-            for i in range(1, 51):
-                idx = (p2_idx + i * direction) % self.strip_length
-                strip[idx] = [255, 255, 0]
+            for i in range(1, 4):
+                idx = (p2_idx + int(i * direction)) % self.strip_length
+                strip[idx] = [255, 255, 255]
+                
+        elif self.p2_last_action == 3:  # P2 Long attack
+            direction = self._get_direction(self.p2_pos, self.p1_pos)
+            for i in range(1, 11):
+                idx = (p2_idx + int(i * direction)) % self.strip_length
+                strip[idx] = [0, 255, 255]
         
         return strip

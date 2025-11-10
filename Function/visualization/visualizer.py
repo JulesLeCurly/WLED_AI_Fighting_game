@@ -88,7 +88,7 @@ class GameVisualizer:
         self.ax_stats.text(102, 2.0, f"{info['p2_mana']:.0f}", fontsize=10, ha='left', va='center')
         
         # Action labels
-        actions = ['LEFT', 'RIGHT', 'SHORT ATK', 'LONG ATK']
+        actions = ['LEFT', 'RIGHT', 'SHORT ATK', 'LONG ATK', 'REST']
         p1_action = actions[info['p1_action']] if info['p1_action'] is not None else 'NONE'
         p2_action = actions[info['p2_action']] if info['p2_action'] is not None else 'NONE'
         
@@ -114,7 +114,7 @@ class GameVisualizer:
         self.ax_history.legend()
         self.ax_history.grid(True, alpha=0.3)
         
-        plt.pause(0.03)  # 30 FPS
+        plt.pause(1 / 60)  # 30 FPS
     
     def run_game(self, num_games=1):
         """Run and visualize games"""
