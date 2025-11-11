@@ -1,19 +1,37 @@
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
+from typing import Dict, List, Tuple
+import random
 
 class Combat1DEnv(gym.Env):
     """
-    1D Combat Environment for Reinforcement Learning
-    Two agents fight on a cyclic 1D world (300 pixels LED strip)
+    1D Combat Environment with N-player support
+    Players identified by unique IDs in dictionaries
     """
     
-    def __init__(self, strip_length=300):
+    def __init__(self, strip_length=300, num_players=2):
         super().__init__()
         
         # World parameters
         self.strip_length = strip_length
+        self.num_players = num_players
         self.max_steps = 900  # 30 seconds at 30 FPS
+        
+        # Generate player IDs
+        self.player_ids = [f"p{i+1}" for i in range(num_players)]
+        
+        # Player colors for visualization (RGB)
+        self.player_colors = {
+            "p1": [255, 0, 0],      # Red
+            "p2": [0, 0, 255],      # Blue
+            "p3": [0, 255, 0],      # Green
+            "p4": [255, 255, 0],    # Yellow
+            "p5": [255, 0, 255],    # Magenta
+            "p6": [0, 255, 255],    # Cyan
+            "p7": [255, 128, 0],    # Orange
+            "p8": [128, 0, 255],    # Purple
+        }
         
         # Game parameters
         self.max_hp = 100
@@ -21,62 +39,75 @@ class Combat1DEnv(gym.Env):
         self.mana_regen = 2
         self.move_speed = 2
         
-        # Action costs and effects
+        # Action configuration
         self.actions_config = {
             0: {"name": "left", "mana": 5, "range": 0, "damage": 0},
             1: {"name": "right", "mana": 5, "range": 0, "damage": 0},
-            2: {"name": "attack_short", "mana": 10, "range": 3, "damage": 15},
-            3: {"name": "attack_long", "mana": 25, "range": 10, "damage": 10},
+            2: {"name": "attack_short", "mana": 10, "range": 10, "damage": 15},
+            3: {"name": "attack_long", "mana": 25, "range": 50, "damage": 10},
             4: {"name": "rest", "mana": 0, "range": 0, "damage": 0}
         }
         
-        # Action and observation spaces
+        # Spaces
         self.action_space = spaces.Discrete(len(self.actions_config))
+
+        self.Observation_dict = {
+            "my_hp": {"low": 0, "high": self.max_hp},
+            "my_mana": {"low": 0, "high": self.max_mana},
+            "avg_opp_hp": {"low": 0, "high": self.max_hp},
+            "avg_opp_mana": {"low": 0, "high": self.max_mana},
+            "num_alive": {"low": 0, "high": self.num_players},
+
+            "closest_distance_to_opp_1": {"low": 0, "high": self.strip_length},
+            "closest_direction_to_opp_1": {"low": -1, "high": 1},
+            "opp_1_hp": {"low": 0, "high": self.max_hp},
+            "opp_1_mana": {"low": 0, "high": self.max_mana},
+
+            "closest_distance_to_opp_2": {"low": 0, "high": self.strip_length},
+            "closest_direction_to_opp_2": {"low": -1, "high": 1},
+            "opp_2_hp": {"low": 0, "high": self.max_hp},
+            "opp_2_mana": {"low": 0, "high": self.max_mana},
+        }
         
-        # FIXED: Observation space now matches normalized values
-        # [distance_norm, direction, my_hp_norm, my_mana_norm, opp_hp_norm, opp_mana_norm]
         self.observation_space = spaces.Box(
-            low=np.array([0.0, -1.0, 0.0, 0.0, 0.0, 0.0]),
-            high=np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+            low=np.array([dict_observation_one_ellement["low"] for dict_observation_one_ellement in self.Observation_dict.values()]),
+            high=np.array([dict_observation_one_ellement["high"] for dict_observation_one_ellement in self.Observation_dict.values()]),
             dtype=np.float32
         )
-        
         self.reset()
     
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         
-        # FIXED: Random spawn positions (minimum distance = 50 pixels)
-        self.p1_pos = float(self.np_random.integers(0, self.strip_length))
-        
-        # Ensure minimum distance between players
-        min_distance = 50
-        while True:
-            self.p2_pos = float(self.np_random.integers(0, self.strip_length))
-            distance = self._get_cyclic_distance(self.p1_pos, self.p2_pos)
-            if distance >= min_distance:
-                break
+        players_shuffle = self.player_ids.copy()
+        random.shuffle(players_shuffle)
+
+        # Initialize player positions (evenly distributed)
+        spacing = self.strip_length / self.num_players
+        self.positions = {
+            pid: spacing * i for i, pid in enumerate(players_shuffle)
+        }
         
         # Initialize stats
-        self.p1_hp = self.max_hp
-        self.p2_hp = self.max_hp
-        self.p1_mana = self.max_mana
-        self.p2_mana = self.max_mana
+        self.hp = {pid: self.max_hp for pid in self.player_ids}
+        self.mana = {pid: self.max_mana for pid in self.player_ids}
+        self.alive = {pid: True for pid in self.player_ids}
+        self.not_moving_step = {pid: 0 for pid in self.player_ids}
+        
+        # Last actions for visualization
+        self.last_actions = {pid: None for pid in self.player_ids}
+        
+        # Attack effects (for visualization)
+        self.active_attacks = []  # List of (pos, direction, range, color)
         
         # Step counter
         self.current_step = 0
         
-        # Last actions for visualization
-        self.p1_last_action = None
-        self.p2_last_action = None
-        
-        # Get initial observations
-        obs_p1 = self._get_observation(player=1)
-        obs_p2 = self._get_observation(player=2)
-        
+        # Get observations for all players
+        observations = {pid: self._get_observation(pid) for pid in self.player_ids}
         info = self._get_info()
         
-        return (obs_p1, obs_p2), info
+        return observations, info
     
     def _get_cyclic_distance(self, pos1, pos2):
         """Calculate shortest distance on cyclic world"""
@@ -90,216 +121,262 @@ class Combat1DEnv(gym.Env):
         wrap_right = (to_pos + self.strip_length) - from_pos
         wrap_left = to_pos - (from_pos + self.strip_length)
         
-        distances = {
-            direct: 0,
-            wrap_right: 1,
-            wrap_left: -1
-        }
-        
         min_dist = min(abs(direct), abs(wrap_right), abs(wrap_left))
         
-        for dist, direction in distances.items():
-            if abs(dist) == min_dist:
-                return 1 if dist > 0 else -1
-        
-        return 0
+        if abs(direct) == min_dist:
+            return 1 if direct > 0 else -1
+        elif abs(wrap_right) == min_dist:
+            return 1
+        else:
+            return -1
     
-    def _get_observation(self, player):
+    def _get_closest_opponent(self, player_id):
+        """Find closest alive opponent"""
+        my_pos = self.positions[player_id]
+        min_dist = float('inf')
+        closest_pos = None
+        
+        for pid in self.player_ids:
+            if pid != player_id and self.alive[pid]:
+                dist = self._get_cyclic_distance(my_pos, self.positions[pid])
+                if dist < min_dist:
+                    min_dist = dist
+                    closest_pos = self.positions[pid]
+        
+        if closest_pos is None:
+            return self.strip_length / 2, 0  # No opponents
+        
+        direction = self._get_direction(my_pos, closest_pos)
+        return min_dist, direction
+    
+    def _get_n_closest_opponents(self, player_id, n=3):
+        """Retourne les n adversaires vivants les plus proches d'un joueur donné."""
+        my_pos = self.positions[player_id]
+        distances = []
+
+        # Calculer la distance à chaque adversaire vivant
+        for pid in self.player_ids:
+            if pid != player_id and self.alive[pid]:
+                dist = self._get_cyclic_distance(my_pos, self.positions[pid])
+                direction = self._get_direction(my_pos, self.positions[pid])
+                distances.append((dist, direction, pid))
+
+        # Trier les adversaires par distance croissante
+        distances.sort(key=lambda x: x[0])
+
+        # Garder seulement les n plus proches
+        n_closest = distances[:n]
+
+        # Si aucun adversaire vivant
+        if not n_closest:
+            return [(self.strip_length / 2, 0, None)]
+
+        return n_closest
+
+    
+    def _get_observation(self, player_id):
         """Get observation for a specific player"""
-        if player == 1:
-            my_pos, opp_pos = self.p1_pos, self.p2_pos
-            my_hp, opp_hp = self.p1_hp, self.p2_hp
-            my_mana, opp_mana = self.p1_mana, self.p2_mana
-        else:
-            my_pos, opp_pos = self.p2_pos, self.p1_pos
-            my_hp, opp_hp = self.p2_hp, self.p1_hp
-            my_mana, opp_mana = self.p2_mana, self.p1_mana
+        if not self.alive[player_id]:
+            return np.zeros(len(self.Observation_dict), dtype=np.float32)
         
-        distance = self._get_cyclic_distance(my_pos, opp_pos)
-        direction = self._get_direction(my_pos, opp_pos)
+        # Calculate average opponent HP
+        alive_opponents = [pid for pid in self.player_ids if pid != player_id and self.alive[pid]]
         
-        # Normalized observation (all values 0-1)
+        avg_opp_hp = np.mean([self.hp[pid] for pid in alive_opponents]) if alive_opponents else 0
+        avg_opp_mana = np.mean([self.mana[pid] for pid in alive_opponents]) if alive_opponents else 0
+
+        closest_players = self._get_n_closest_opponents(player_id=player_id, n=2)
+
+        # Find closest opponent
+        closest_dist_opp_1, closest_dir_opp_1, closest_pid_opp_1 = closest_players[0][0], closest_players[0][1], closest_players[0][2]
+        closest_dist_opp_2, closest_dir_opp_2, closest_pid_opp_2 = closest_players[0][0], closest_players[0][1], closest_players[0][2]
+
+        opp_1_hp = self.hp[closest_pid_opp_1] if closest_pid_opp_1 is not None else 0
+        opp_2_hp = self.hp[closest_pid_opp_2] if closest_pid_opp_2 is not None else 0
+
+        opp_1_mana = self.mana[closest_pid_opp_1] if closest_pid_opp_1 is not None else 0
+        opp_2_mana = self.mana[closest_pid_opp_2] if closest_pid_opp_2 is not None else 0
+
+        
         return np.array([
-            distance / self.strip_length,
-            direction,
-            my_hp / self.max_hp,
-            my_mana / self.max_mana,
-            opp_hp / self.max_hp,
-            opp_mana / self.max_mana
-        ], dtype=np.float32)
-        
+            self.hp[player_id] / self.max_hp, # my_hp
+            self.mana[player_id] / self.max_mana, # my_mana
+            avg_opp_hp / self.max_hp, # avg_opp_hp
+            avg_opp_mana / self.max_mana, # avg_opp_mana
+            len(alive_opponents) / (self.num_players - 1), # num_alive
+
+            closest_dist_opp_1 / self.strip_length, # closest_dist_opp_1
+            closest_dir_opp_1, # closest_dir_opp_1
+            opp_1_hp / self.max_hp, # opp_1_hp
+            opp_1_mana / self.max_mana, # opp_1_mana
+
+            closest_dist_opp_2 / self.strip_length, # closest_dist_opp_2
+            closest_dir_opp_2, # closest_dir_opp_2
+            opp_2_hp / self.max_hp, # opp_2_hp
+            opp_2_mana / self.max_mana, # opp_2_mana
+        ])
     
-    def _execute_action(self, player, action):
+    def _execute_action(self, player_id, action):
         """Execute action for a player and return reward"""
-        reward = -0.01  # Small penalty for each step
+        if not self.alive[player_id]:
+            return 0
         
-        if player == 1:
-            pos, mana = self.p1_pos, self.p1_mana
-            opp_pos = self.p2_pos
-        else:
-            pos, mana = self.p2_pos, self.p2_mana
-            opp_pos = self.p1_pos
+        reward = -0.01  # Small time penalty
         
+        pos = self.positions[player_id]
+        mana = self.mana[player_id]
         action_config = self.actions_config[action]
         
-        # Check if enough mana
+        # Check mana
         if mana < action_config["mana"]:
-            return reward - 5  # Penalty for invalid action
+            return reward - 5  # Invalid action penalty
         
-        # Execute action
-        if action == 0 and mana >= 5:  # Left
+        # Execute movement
+        if action == 0:  # Left
             pos = (pos - self.move_speed) % self.strip_length
-        elif action == 1 and mana >= 5:  # Right
+        elif action == 1:  # Right
             pos = (pos + self.move_speed) % self.strip_length
-        elif action in [2, 3]:  # Attacks
-            distance = self._get_cyclic_distance(pos, opp_pos)
+        
+        # Execute attacks
+        elif action in [2, 3]:
+            damage = action_config["damage"]
+            attack_range = action_config["range"]
             
-            if distance <= action_config["range"]:
-                # Hit!
-                damage = action_config["damage"]
-                if player == 1:
-                    self.p2_hp -= damage
-                else:
-                    self.p1_hp -= damage
-                reward += 10  # Reward for hitting
+            # Find all targets in range
+            targets_hit = []
+            for target_id in self.player_ids:
+                if target_id != player_id and self.alive[target_id]:
+                    dist = self._get_cyclic_distance(pos, self.positions[target_id])
+                    if dist <= attack_range:
+                        targets_hit.append(target_id)
+            
+            if targets_hit:
+                # Hit someone!
+                for target_id in targets_hit:
+                    self.hp[target_id] -= damage
+                    if self.hp[target_id] <= 0:
+                        self.alive[target_id] = False
+                        reward += 50  # Kill bonus
+                reward += 10 * len(targets_hit)  # Hit reward
+                
+                # Store attack for visualization
+                direction = self._get_direction(pos, self.positions[targets_hit[0]])
+                self.active_attacks.append({
+                    'pos': pos,
+                    'direction': direction,
+                    'range': attack_range,
+                    'color': self.player_colors[player_id],
+                    'steps_left': 2  # Display for 2 steps
+                })
+            elif action == 4:
+                # Don't move
+                self.not_moving_step[player_id] += 1
+                if self.not_moving_step[player_id] >= 10:
+                    reward -= 10
             else:
                 # Miss
-                reward -= 5  # Penalty for missing
-            
-        mana -= action_config["mana"]
+                reward -= 5
         
-        # Update player state
-        if player == 1:
-            self.p1_pos = pos
-            self.p1_mana = mana
-            self.p1_last_action = action
-        else:
-            self.p2_pos = pos
-            self.p2_mana = mana
-            self.p2_last_action = action
+        # Update state
+        self.positions[player_id] = pos
+        self.mana[player_id] = mana - action_config["mana"]
+        self.last_actions[player_id] = action
         
         return reward
     
-    def step(self, actions):
+    def step(self, actions: Dict[str, int]):
         """
-        Execute one step with both players acting simultaneously
-        actions: tuple (action_p1, action_p2)
+        Execute one step with all players acting simultaneously
+        actions: dict {player_id: action}
         """
-        action_p1, action_p2 = actions
+        # Store initial HP for damage calculation
+        prev_hp = {pid: self.hp[pid] for pid in self.player_ids}
         
-        # Execute actions
-        prev_p1_hp, prev_p2_hp = self.p1_hp, self.p2_hp
-        prev_p1_pos, prev_p2_pos = self.p1_pos, self.p2_pos
-
-        reward_p1 = self._execute_action(1, action_p1)
-        reward_p2 = self._execute_action(2, action_p2)
+        # Execute all actions
+        rewards = {}
+        for player_id in self.player_ids:
+            if player_id in actions and self.alive[player_id]:
+                rewards[player_id] = self._execute_action(player_id, actions[player_id])
+            else:
+                rewards[player_id] = 0
         
-        # Regenerate mana
-        self.p1_mana = min(self.max_mana, self.p1_mana + self.mana_regen)
-        self.p2_mana = min(self.max_mana, self.p2_mana + self.mana_regen)
+        # Regenerate mana for alive players
+        for player_id in self.player_ids:
+            if self.alive[player_id]:
+                self.mana[player_id] = min(self.max_mana, self.mana[player_id] + self.mana_regen)
         
-        # Check damage rewards
-        damage_done_p1 = prev_p2_hp - self.p2_hp
-        damage_done_p2 = prev_p1_hp - self.p1_hp
+        # Add damage-based rewards
+        for player_id in self.player_ids:
+            if self.alive[player_id]:
+                damage_dealt = prev_hp[player_id] - self.hp[player_id]
+                rewards[player_id] += damage_dealt * 1.0
+        
+        # Subtract rewards for player that are on each other
+        for player_id in self.player_ids:
+            if self.alive[player_id]:
+                for target_id in self.player_ids:
+                    if target_id != player_id and self.alive[target_id]:
+                        dist = self._get_cyclic_distance(self.positions[player_id], self.positions[target_id])
+                        if dist == 0:
+                            rewards[player_id] -= 10
 
-        reward_p1 += damage_done_p1 * 1.0  # proportional to damage dealt
-        reward_p2 += damage_done_p2 * 1.0
-
-        prev_distance = self._get_cyclic_distance(prev_p1_pos, prev_p2_pos)
-        new_distance = self._get_cyclic_distance(self.p1_pos, self.p2_pos)
-
-        if new_distance == 0:
-            reward_p1 -= 4
-            reward_p2 -= 4
-
-        reward_p1 += (prev_distance - new_distance) * 0.1  # bonus si rapprochement
-
+        
+        # Update attack effects
+        self.active_attacks = [
+            {**atk, 'steps_left': atk['steps_left'] - 1}
+            for atk in self.active_attacks if atk['steps_left'] > 0
+        ]
         
         self.current_step += 1
         
-        # Check termination
-        terminated = False
-        if self.p1_hp <= 0:
-            reward_p1 -= 100
-            reward_p2 += 100
-            terminated = True
-        elif self.p2_hp <= 0:
-            reward_p1 += 100
-            reward_p2 -= 100
-            terminated = True
-        elif self.current_step >= self.max_steps:
-            # Timeout: winner is player with most HP
-            if self.p1_hp > self.p2_hp:
-                reward_p1 += 50
-                reward_p2 -= 50
-            elif self.p2_hp > self.p1_hp:
-                reward_p2 += 50
-                reward_p1 -= 50
-            terminated = True
+        # Check game end
+        alive_count = sum(self.alive.values())
+        terminated = alive_count <= 1 or self.current_step >= self.max_steps
+        
+        if terminated:
+            # Victory bonus for survivors
+            for player_id in self.player_ids:
+                if self.alive[player_id]:
+                    rewards[player_id] += 100
         
         # Get observations
-        obs_p1 = self._get_observation(player=1)
-        obs_p2 = self._get_observation(player=2)
-        
+        observations = {pid: self._get_observation(pid) for pid in self.player_ids}
         truncated = self.current_step >= self.max_steps
         info = self._get_info()
         
-        return (obs_p1, obs_p2), (reward_p1, reward_p2), terminated, truncated, info
+        return observations, rewards, terminated, truncated, info
     
     def _get_info(self):
-        """Return additional info for debugging/visualization"""
+        """Return game state info"""
         return {
-            "p1_pos": self.p1_pos,
-            "p2_pos": self.p2_pos,
-            "p1_hp": self.p1_hp,
-            "p2_hp": self.p2_hp,
-            "p1_mana": self.p1_mana,
-            "p2_mana": self.p2_mana,
-            "p1_action": self.p1_last_action,
-            "p2_action": self.p2_last_action,
-            "step": self.current_step
+            'positions': self.positions.copy(),
+            'hp': self.hp.copy(),
+            'mana': self.mana.copy(),
+            'alive': self.alive.copy(),
+            'last_actions': self.last_actions.copy(),
+            'step': self.current_step,
+            'num_alive': sum(self.alive.values())
         }
     
     def render(self):
-        """
-        Return LED strip state for visualization
-        FIXED: Integer positions only, automatic attack direction
-        """
-        strip = np.zeros((self.strip_length, 3), dtype=np.uint8)
+        """Return LED strip state for visualization"""
+        strip = np.zeros((self.strip_length, 3))
         
-        # Convert float positions to integers
-        p1_idx = int(round(self.p1_pos)) % self.strip_length
-        p2_idx = int(round(self.p2_pos)) % self.strip_length
+        # Draw active attacks first (background layer)
+        for attack in self.active_attacks:
+            pos = int(attack['pos'])
+            direction = attack['direction']
+            for i in range(1, attack['range'] + 1):
+                idx = (pos + i * direction) % self.strip_length
+                # Fade effect
+                intensity = 1.0 - (i / attack['range']) * 0.5
+                color = np.array(attack['color']) * intensity * (attack['steps_left'] / 2)
+                strip[idx] = np.clip(strip[idx] + color, 0, 255)
         
-        # Player 1 (Red)
-        strip[p1_idx] = [255, 0, 0]
+        # Draw players (foreground layer)
+        for player_id in self.player_ids:
+            if self.alive[player_id]:
+                idx = int(self.positions[player_id]) % self.strip_length
+                strip[idx] = self.player_colors[player_id]
         
-        # Player 2 (Blue)
-        strip[p2_idx] = [0, 0, 255]
-        
-        # Attack visualizations - FIXED: Automatic direction toward opponent
-        if self.p1_last_action == 2:  # P1 Short attack
-            direction = self._get_direction(self.p1_pos, self.p2_pos)
-            for i in range(1, 4):  # range = 3 pixels
-                idx = (p1_idx + int(i * direction)) % self.strip_length
-                strip[idx] = [255, 255, 255]
-                
-        elif self.p1_last_action == 3:  # P1 Long attack
-            direction = self._get_direction(self.p1_pos, self.p2_pos)
-            for i in range(1, 11):  # range = 10 pixels
-                idx = (p1_idx + int(i * direction)) % self.strip_length
-                strip[idx] = [255, 255, 0]
-        
-        if self.p2_last_action == 2:  # P2 Short attack
-            direction = self._get_direction(self.p2_pos, self.p1_pos)
-            for i in range(1, 4):
-                idx = (p2_idx + int(i * direction)) % self.strip_length
-                strip[idx] = [255, 255, 255]
-                
-        elif self.p2_last_action == 3:  # P2 Long attack
-            direction = self._get_direction(self.p2_pos, self.p1_pos)
-            for i in range(1, 11):
-                idx = (p2_idx + int(i * direction)) % self.strip_length
-                strip[idx] = [0, 255, 255]
-        
-        return strip
+        return strip.astype(np.uint8)

@@ -1,193 +1,305 @@
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from matplotlib.patches import Rectangle
+import pygame
 import numpy as np
 from Function.core.game_env import Combat1DEnv
 from Function.agents.dqn_agent import DQNAgent
 
-class GameVisualizer:
-    """Real-time visualization of the game"""
+class PygameVisualizer:
+    """
+    Real-time game visualization using Pygame
+    Much smoother than matplotlib for animations
+    """
     
-    def __init__(self, env, agent1, agent2):
+    def __init__(self, env, agent, fps=30):
         self.env = env
-        self.agent1 = agent1
-        self.agent2 = agent2
+        self.agent = agent
+        self.fps = fps
         
-        # Setup figure
-        self.fig, self.axes = plt.subplots(3, 1, figsize=(14, 8))
-        self.fig.suptitle('1D Combat Arena - RL Agents Battle', fontsize=16, fontweight='bold')
+        # Initialize Pygame
+        pygame.init()
         
-        # LED strip axis
-        self.ax_strip = self.axes[0]
-        self.ax_strip.set_xlim(0, env.strip_length)
-        self.ax_strip.set_ylim(0, 1)
-        self.ax_strip.set_title('LED Strip (300 pixels)')
-        self.ax_strip.set_yticks([])
+        # Screen dimensions
+        self.width = 1400
+        self.height = 800
+        self.screen = pygame.display.set_mode((self.width, self.height))
+        pygame.display.set_caption('1D Combat Arena - RL Battle')
         
-        # Stats axis
-        self.ax_stats = self.axes[1]
-        self.ax_stats.set_xlim(0, 100)
-        self.ax_stats.set_ylim(0, 5)
-        self.ax_stats.set_title('Player Stats')
-        self.ax_stats.set_yticks([])
+        # Clock for FPS control
+        self.clock = pygame.time.Clock()
         
-        # History axis
-        self.ax_history = self.axes[2]
-        self.ax_history.set_title('HP History')
-        self.ax_history.set_xlabel('Step')
-        self.ax_history.set_ylabel('HP')
-        self.ax_history.set_ylim(0, 100)
+        # Fonts
+        self.font_large = pygame.font.Font(None, 48)
+        self.font_medium = pygame.font.Font(None, 32)
+        self.font_small = pygame.font.Font(None, 24)
         
-        # History data
-        self.hp_history_p1 = []
-        self.hp_history_p2 = []
+        # Colors
+        self.bg_color = (20, 20, 30)
+        self.text_color = (255, 255, 255)
+        self.grid_color = (50, 50, 60)
         
-        plt.tight_layout()
+        # LED strip visualization area
+        self.strip_x = 50
+        self.strip_y = 100
+        self.strip_width = 1300
+        self.strip_height = 80
+        self.pixel_width = self.strip_width / env.strip_length
+        
+        # Stats area
+        self.stats_y = 220
+        self.stats_height = 200
+        
+        # HP History
+        self.history_y = 450
+        self.history_height = 300
+        self.hp_history = {pid: [] for pid in env.player_ids}
+        
+        # Action names
+        self.action_names = ['LEFT', 'RIGHT', 'SHORT ATK', 'LONG ATK', 'REST']
     
-    def update_display(self, info):
-        """Update all visualizations"""
-        # Clear axes
-        self.ax_strip.clear()
-        self.ax_stats.clear()
+    def draw_led_strip(self, strip_data):
+        """Draw the LED strip"""
+        for i in range(self.env.strip_length):
+            x = self.strip_x + i * self.pixel_width
+            color = tuple(strip_data[i].astype(int))
+            pygame.draw.rect(
+                self.screen,
+                color,
+                (x, self.strip_y, self.pixel_width + 1, self.strip_height)
+            )
         
-        # LED strip visualization
-        strip = self.env.render()
+        # Border
+        pygame.draw.rect(
+            self.screen,
+            self.text_color,
+            (self.strip_x - 2, self.strip_y - 2, 
+             self.strip_width + 4, self.strip_height + 4),
+            2
+        )
         
-        for i in range(len(strip)):
-            color = strip[i] / 255.0
-            self.ax_strip.add_patch(Rectangle((i, 0), 1, 1, facecolor=color, edgecolor='none'))
-        
-        self.ax_strip.set_xlim(0, self.env.strip_length)
-        self.ax_strip.set_ylim(0, 1)
-        self.ax_strip.set_title('LED Strip (300 pixels)', fontsize=12, fontweight='bold')
-        self.ax_strip.set_yticks([])
-        self.ax_strip.set_xticks([0, 75, 150, 225, 300])
-        
-        # Stats visualization
-        self.ax_stats.set_xlim(0, 100)
-        self.ax_stats.set_ylim(0, 6)
-        
-        # Player 1 stats (Red)
-        p1_hp_bar = Rectangle((0, 4.5), info['p1_hp'], 0.4, facecolor='red', edgecolor='black', linewidth=2)
-        p1_mana_bar = Rectangle((0, 3.8), info['p1_mana'], 0.4, facecolor='orange', edgecolor='black', linewidth=2)
-        self.ax_stats.add_patch(p1_hp_bar)
-        self.ax_stats.add_patch(p1_mana_bar)
-        self.ax_stats.text(-5, 4.7, 'P1 HP:', fontsize=10, ha='right', va='center', fontweight='bold')
-        self.ax_stats.text(-5, 4.0, 'P1 Mana:', fontsize=10, ha='right', va='center', fontweight='bold')
-        self.ax_stats.text(102, 4.7, f"{info['p1_hp']:.0f}", fontsize=10, ha='left', va='center')
-        self.ax_stats.text(102, 4.0, f"{info['p1_mana']:.0f}", fontsize=10, ha='left', va='center')
-        
-        # Player 2 stats (Blue)
-        p2_hp_bar = Rectangle((0, 2.5), info['p2_hp'], 0.4, facecolor='blue', edgecolor='black', linewidth=2)
-        p2_mana_bar = Rectangle((0, 1.8), info['p2_mana'], 0.4, facecolor='cyan', edgecolor='black', linewidth=2)
-        self.ax_stats.add_patch(p2_hp_bar)
-        self.ax_stats.add_patch(p2_mana_bar)
-        self.ax_stats.text(-5, 2.7, 'P2 HP:', fontsize=10, ha='right', va='center', fontweight='bold')
-        self.ax_stats.text(-5, 2.0, 'P2 Mana:', fontsize=10, ha='right', va='center', fontweight='bold')
-        self.ax_stats.text(102, 2.7, f"{info['p2_hp']:.0f}", fontsize=10, ha='left', va='center')
-        self.ax_stats.text(102, 2.0, f"{info['p2_mana']:.0f}", fontsize=10, ha='left', va='center')
-        
-        # Action labels
-        actions = ['LEFT', 'RIGHT', 'SHORT ATK', 'LONG ATK', 'REST']
-        p1_action = actions[info['p1_action']] if info['p1_action'] is not None else 'NONE'
-        p2_action = actions[info['p2_action']] if info['p2_action'] is not None else 'NONE'
-        
-        self.ax_stats.text(50, 5.5, f'Last Action: {p1_action}', fontsize=9, ha='center', color='red', fontweight='bold')
-        self.ax_stats.text(50, 1.2, f'Last Action: {p2_action}', fontsize=9, ha='center', color='blue', fontweight='bold')
-        
-        self.ax_stats.set_title(f'Player Stats - Step {info["step"]}', fontsize=12, fontweight='bold')
-        self.ax_stats.set_yticks([])
-        self.ax_stats.set_xticks([])
-        
-        # HP history
-        self.hp_history_p1.append(info['p1_hp'])
-        self.hp_history_p2.append(info['p2_hp'])
-        
-        self.ax_history.clear()
-        if len(self.hp_history_p1) > 1:
-            self.ax_history.plot(self.hp_history_p1, color='red', linewidth=2, label='Player 1')
-            self.ax_history.plot(self.hp_history_p2, color='blue', linewidth=2, label='Player 2')
-        self.ax_history.set_title('HP History', fontsize=12, fontweight='bold')
-        self.ax_history.set_xlabel('Step')
-        self.ax_history.set_ylabel('HP')
-        self.ax_history.set_ylim(0, 100)
-        self.ax_history.legend()
-        self.ax_history.grid(True, alpha=0.3)
-        
-        plt.pause(1 / 60)  # 30 FPS
+        # Title
+        title = self.font_medium.render('LED STRIP (300 pixels)', True, self.text_color)
+        self.screen.blit(title, (self.strip_x, self.strip_y - 40))
     
-    def run_game(self, num_games=1):
+    def draw_player_stats(self, info):
+        """Draw player stats bars"""
+        y_offset = self.stats_y
+        spacing = 80
+        
+        for i, player_id in enumerate(self.env.player_ids):
+            if not self.env.alive[player_id]:
+                continue
+            
+            y = y_offset + i * spacing
+            
+            # Player label
+            color = self.env.player_colors[player_id]
+            label = self.font_small.render(f'{player_id.upper()}', True, color)
+            self.screen.blit(label, (self.strip_x - 30, y + 5))
+            
+            # HP bar
+            hp_width = int((info['hp'][player_id] / self.env.max_hp) * 400)
+            pygame.draw.rect(self.screen, color, (self.strip_x + 50, y, hp_width, 25))
+            pygame.draw.rect(self.screen, self.grid_color, (self.strip_x + 50, y, 400, 25), 2)
+            hp_text = self.font_small.render(f"HP: {info['hp'][player_id]:.0f}", True, self.text_color)
+            self.screen.blit(hp_text, (self.strip_x + 460, y + 2))
+            
+            # Mana bar
+            mana_width = int((info['mana'][player_id] / self.env.max_mana) * 400)
+            pygame.draw.rect(self.screen, (100, 200, 255), (self.strip_x + 50, y + 30, mana_width, 25))
+            pygame.draw.rect(self.screen, self.grid_color, (self.strip_x + 50, y + 30, 400, 25), 2)
+            mana_text = self.font_small.render(f"Mana: {info['mana'][player_id]:.0f}", True, self.text_color)
+            self.screen.blit(mana_text, (self.strip_x + 460, y + 32))
+            
+            # Last action
+            if info['last_actions'][player_id] is not None:
+                action = self.action_names[info['last_actions'][player_id]]
+                action_text = self.font_small.render(f"Action: {action}", True, (255, 255, 0))
+                self.screen.blit(action_text, (self.strip_x + 600, y + 15))
+    
+    def draw_hp_history(self):
+        """Draw HP history graph"""
+        x = self.strip_x
+        y = self.history_y
+        width = self.strip_width
+        height = self.history_height
+        
+        # Background
+        pygame.draw.rect(self.screen, (30, 30, 40), (x, y, width, height))
+        pygame.draw.rect(self.screen, self.grid_color, (x, y, width, height), 2)
+        
+        # Title
+        title = self.font_medium.render('HP HISTORY', True, self.text_color)
+        self.screen.blit(title, (x, y - 40))
+        
+        # Grid lines
+        for i in range(5):
+            grid_y = y + (height // 4) * i
+            pygame.draw.line(self.screen, self.grid_color, (x, grid_y), (x + width, grid_y), 1)
+        
+        # Draw HP lines
+        colors_rgb = {
+            'p1': (255, 0, 0),
+            'p2': (0, 0, 255),
+            'p3': (0, 255, 0),
+            'p4': (255, 255, 0),
+            'p5': (255, 0, 255),
+            'p6': (0, 255, 255),
+        }
+        
+        for player_id, history in self.hp_history.items():
+            if len(history) < 2:
+                continue
+            
+            color = colors_rgb.get(player_id, (255, 255, 255))
+            points = []
+            
+            for i, hp in enumerate(history[-200:]):  # Last 200 steps
+                px = x + (i / max(len(history[-200:]), 1)) * width
+                py = y + height - (hp / 100) * height
+                points.append((px, py))
+            
+            if len(points) > 1:
+                pygame.draw.lines(self.screen, color, False, points, 3)
+            
+            # Legend
+            legend_text = self.font_small.render(player_id.upper(), True, color)
+            legend_x = x + width - 100 + list(self.hp_history.keys()).index(player_id) * 50
+            self.screen.blit(legend_text, (legend_x, y - 35))
+    
+    def draw_game_info(self, info):
+        """Draw general game information"""
+        # Step counter
+        step_text = self.font_medium.render(f"Step: {info['step']}/{self.env.max_steps}", 
+                                            True, self.text_color)
+        self.screen.blit(step_text, (self.width - 250, 30))
+        
+        # Alive counter
+        alive_text = self.font_medium.render(f"Alive: {info['num_alive']}/{self.env.num_players}", 
+                                             True, (0, 255, 0))
+        self.screen.blit(alive_text, (self.width - 250, 70))
+    
+    def run_game(self, num_games=3):
         """Run and visualize games"""
-        plt.ion()
+        running = True
         
         for game_num in range(1, num_games + 1):
+            if not running:
+                break
+            
             print(f"\n{'='*60}")
-            print(f"Starting Game {game_num}/{num_games}")
+            print(f"Game {game_num}/{num_games}")
             print('='*60)
             
             # Reset
-            (obs_p1, obs_p2), info = self.env.reset()
-            self.hp_history_p1 = [info['p1_hp']]
-            self.hp_history_p2 = [info['p2_hp']]
+            observations, info = self.env.reset()
+            self.hp_history = {pid: [info['hp'][pid]] for pid in self.env.player_ids}
             
             done = False
-            step = 0
             
-            while not done:
-                # Select actions (no exploration, use trained policy)
-                action_p1 = self.agent1.select_action(obs_p1, training=False)
-                action_p2 = self.agent2.select_action(obs_p2, training=False)
+            while not done and running:
+                # Handle events
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        running = False
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_ESCAPE:
+                            running = False
+                        elif event.key == pygame.K_SPACE:
+                            # Pause
+                            paused = True
+                            while paused:
+                                for e in pygame.event.get():
+                                    if e.type == pygame.KEYDOWN and e.key == pygame.K_SPACE:
+                                        paused = False
+                                    elif e.type == pygame.QUIT:
+                                        running = False
+                                        paused = False
+                
+                # Select actions (same agent for all players)
+                actions = {}
+                for player_id in self.env.player_ids:
+                    if self.env.alive[player_id]:
+                        obs = observations[player_id]
+                        actions[player_id] = self.agent.select_action(obs, training=False)
                 
                 # Step
-                (obs_p1, obs_p2), rewards, terminated, truncated, info = self.env.step((action_p1, action_p2))
+                observations, rewards, terminated, truncated, info = self.env.step(actions)
                 done = terminated or truncated
                 
-                # Visualize
-                self.update_display(info)
+                # Update history
+                for player_id in self.env.player_ids:
+                    self.hp_history[player_id].append(info['hp'][player_id])
                 
-                step += 1
+                # Draw everything
+                self.screen.fill(self.bg_color)
+                
+                strip_data = self.env.render()
+                self.draw_led_strip(strip_data)
+                self.draw_player_stats(info)
+                self.draw_hp_history()
+                self.draw_game_info(info)
+                
+                pygame.display.flip()
+                self.clock.tick(self.fps)
             
-            # Game over
-            print(f"\nGame {game_num} finished after {step} steps")
-            if info['p1_hp'] > info['p2_hp']:
-                print("WINNER: Player 1 (Red)")
-            elif info['p2_hp'] > info['p1_hp']:
-                print("WINNER: Player 2 (Blue)")
-            else:
-                print("RESULT: Draw")
-            print(f"Final HP - P1: {info['p1_hp']:.0f}, P2: {info['p2_hp']:.0f}")
-            
-            if game_num < num_games:
-                plt.pause(2)  # Pause between games
+            # Game over screen
+            if running:
+                self.screen.fill(self.bg_color)
+                
+                # Find winner(s)
+                max_hp = max(info['hp'].values())
+                winners = [pid for pid in self.env.player_ids if info['hp'][pid] == max_hp]
+                
+                if len(winners) == 1:
+                    winner_text = self.font_large.render(f"WINNER: {winners[0].upper()}", 
+                                                         True, self.env.player_colors[winners[0]])
+                else:
+                    winner_text = self.font_large.render("DRAW!", True, (255, 255, 0))
+                
+                text_rect = winner_text.get_rect(center=(self.width // 2, self.height // 2))
+                self.screen.blit(winner_text, text_rect)
+                
+                # Stats
+                stats_text = self.font_medium.render(
+                    f"Duration: {info['step']} steps", 
+                    True, self.text_color
+                )
+                stats_rect = stats_text.get_rect(center=(self.width // 2, self.height // 2 + 60))
+                self.screen.blit(stats_text, stats_rect)
+                
+                pygame.display.flip()
+                pygame.time.wait(3000)  # Wait 3 seconds
         
-        plt.ioff()
-        plt.show()
+        pygame.quit()
 
 
-def visualize_trained_agents(agent1_path, agent2_path, num_games=3):
-    """Load trained agents and visualize their gameplay"""
-    env = Combat1DEnv(strip_length=300)
+def visualize_trained_agent(model_path, num_players=2, num_games=3, fps=30):
+    """Load trained agent and visualize gameplay"""
+    env = Combat1DEnv(strip_length=300, num_players=num_players)
     
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
     
-    agent1 = DQNAgent(state_size, action_size)
-    agent2 = DQNAgent(state_size, action_size)
+    agent = DQNAgent(state_size, action_size)
+    agent.load(model_path)
+    agent.epsilon = 0  # No exploration
     
-    agent1.load(agent1_path)
-    agent2.load(agent2_path)
-    
-    agent1.epsilon = 0  # No exploration
-    agent2.epsilon = 0
-    
-    visualizer = GameVisualizer(env, agent1, agent2)
+    visualizer = PygameVisualizer(env, agent, fps=fps)
     visualizer.run_game(num_games=num_games)
 
 
 if __name__ == "__main__":
-    # Example: visualize trained agents
-    visualize_trained_agents(
-        "models/agent1_final.pth",
-        "models/agent2_final.pth",
-        num_games=5
+    # Visualize 2-player duel
+    visualize_trained_agent(
+        "models/agent_self_play_final.pth",
+        num_players=2,
+        num_games=5,
+        fps=30
     )
+    
+    # Or visualize 4-player battle royale
+    # visualize_trained_agent(
+    #     "models/agent_self_play_final.pth",
+    #     num_players=4,
+    #     num_games=3,
+    #     fps=30
+    # )
