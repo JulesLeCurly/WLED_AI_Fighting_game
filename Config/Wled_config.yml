@@ -1,0 +1,8 @@
+WLED_DEVICES: [
+    {"name": "Armoire", "ip": "192.168.1.28", "leds": 141},
+    {"name": "Desktop", "ip": "192.168.1.27", "leds": 153},
+]
+UDP_PORT: 21324
+FPS: 30
+MODEL_PATH: "models/agent_self_play_final.pth"
+NUM_PLAYERS: 2

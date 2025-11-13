@@ -80,55 +80,57 @@ class DQNAgent:
         # Training stats
         self.training_step = 0
     
-    def select_action(self, state, training=True):
-        """Select action using epsilon-greedy policy"""
-        if training and random.random() < self.epsilon:
-            return random.randrange(self.action_size)
-        
+    def select_action(self, state, training=True, threshold=0.5):
+        """Sélectionne plusieurs actions possibles (multi-label)"""
         with torch.no_grad():
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            q_values = self.policy_net(state_tensor)
-            return q_values.argmax().item()
+            q_values = self.policy_net(state_tensor).squeeze(0)
+
+            # Exploration : bruit ou tirage aléatoire
+            if training and random.random() < self.epsilon:
+                actions = (torch.rand_like(q_values) > 0.5).int()
+            else:
+                probs = torch.sigmoid(q_values)  # probabilité d'activation
+                actions = (probs > threshold).int()
+            
+            return actions.cpu().numpy()  # tableau de 0/1 pour chaque action
+
     
     def store_transition(self, state, action, reward, next_state, done):
         """Store experience in replay buffer"""
         self.memory.push(state, action, reward, next_state, done)
+        
     
     def train(self):
-        """Train the network using experience replay"""
         if len(self.memory) < self.batch_size:
             return None
-        
-        # Sample batch
+
         states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size)
-        
-        # Convert to tensors
+
         states = torch.FloatTensor(states).to(self.device)
-        actions = torch.LongTensor(actions).to(self.device)
+        actions = torch.FloatTensor(actions).to(self.device)
         rewards = torch.FloatTensor(rewards).to(self.device)
         next_states = torch.FloatTensor(next_states).to(self.device)
         dones = torch.FloatTensor(dones).to(self.device)
-        
-        # Current Q values
-        current_q_values = self.policy_net(states).gather(1, actions.unsqueeze(1))
-        
-        # Target Q values
+
+        # Q courant : somme des Q-values des actions activées
+        current_q_values = (self.policy_net(states) * actions).sum(dim=1)
+
+        # Q cible : même logique sur le réseau cible
         with torch.no_grad():
             next_q_values = self.target_net(next_states).max(1)[0]
             target_q_values = rewards + (1 - dones) * self.gamma * next_q_values
-        
-        # Compute loss
-        loss = self.criterion(current_q_values.squeeze(), target_q_values)
-        
-        # Optimize
+
+        loss = self.criterion(current_q_values, target_q_values)
+
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
         self.optimizer.step()
-        
+
         self.training_step += 1
-        
         return loss.item()
+
     
     def update_target_network(self):
         """Update target network with policy network weights"""

@@ -1,0 +1,25 @@
+# World parameters
+max_steps: 400
+World_length: 294
+
+# Player parameters
+num_players: 4
+
+# Game parameters
+max_hp: 100
+max_mana: 100
+mana_regen: 2
+move_spee: 2
+
+# Action configuration
+actions_config: {
+    0: {"name": "go_left", "mana": 0},
+    1: {"name": "go_right", "mana": 0},
+    2: {"name": "punch", "mana": 10, "range": 2, "damage": 20},
+    3: {"name": "lazer", "mana": 25, "range": 15, "damage": 10},
+    5: {"name": "left_shield", "mana": 7},
+    6: {"name": "right_shield", "mana": 7},
+    7: {"name": "heal", "mana": 10, "regen": 3},
+    8: {"name": "random_tp", "mana": 75},
+}
+
