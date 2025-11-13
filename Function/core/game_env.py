@@ -5,34 +5,30 @@ from typing import Dict, List, Tuple
 import random
 
 from Function.torch.dqn_agent import DQNAgent
-
 from Function.other.All_basic_function import read_yml
-
 import Function.core.Game_function as Game_function
-
 import Function.Vizualizer.Vizualizer as Viz
 
+
 class Combat1v1Env():
-    def __init__(self, strip_length=300, num_players=2, train=False):
+    """Fixed combat environment with proper reward shaping"""
+    
+    def __init__(self, strip_length=294, num_players=4, train=False):
         if num_players > 8:
             raise ValueError("Maximum number of players is 8.")
         
         self.is_train = train
-
         Config = read_yml("Config/Game_env.yml")
+        
         # World parameters
         self.strip_length = strip_length
         self.num_players = num_players
         self.max_steps = Config["max_steps"]
-
-
-
-
         
         # Generate player IDs
         self.player_ids = [f"p{i+1}" for i in range(num_players)]
         
-        # Player colors for visualization (RGB)
+        # Player colors
         self.player_colors = {
             "p1": [255, 0, 0],      # Red
             "p2": [0, 0, 255],      # Blue
@@ -43,151 +39,136 @@ class Combat1v1Env():
             "p7": [255, 128, 0],    # Orange
             "p8": [128, 0, 255],    # Purple
         }
-        
         # Game parameters
         self.max_hp = Config["max_hp"]
         self.max_mana = Config["max_mana"]
         self.mana_regen = Config["mana_regen"]
-
-
+        
         # Action configuration
         self.actions_config = Config["actions_config"]
-
-
         self.actions_config_with_name = {}
-        for k, v in self.actions_config.items():
-            action_params = v.copy()
+        for action in self.actions_config:
+            action_params = action.copy()
             action_params.pop('name', None)
-            self.actions_config_with_name[v["name"]] = action_params
+            self.actions_config_with_name[action["name"]] = action_params
         
-        # Spaces
+        # Action space: ONE action per step
         self.action_space = spaces.Discrete(len(self.actions_config))
-
-
-        self.Observation_dict = {
-            "my_hp": {"low": 0, "high": self.max_hp},
-            "my_mana": {"low": 0, "high": self.max_mana},
-            "avg_opp_hp": {"low": 0, "high": self.max_hp},
-            "avg_opp_mana": {"low": 0, "high": self.max_mana},
-            "num_alive": {"low": 0, "high": num_players},
-
-            "closest_distance_to_opp_1": {"low": 0, "high": strip_length},
-            "closest_direction_to_opp_1": {"low": -1, "high": 1},
-            "opp_1_hp": {"low": 0, "high": self.max_hp},
-            "opp_1_mana": {"low": 0, "high": self.max_mana},
-
-            "closest_distance_to_opp_2": {"low": 0, "high": strip_length},
-            "closest_direction_to_opp_2": {"low": -1, "high": 1},
-            "opp_2_hp": {"low": 0, "high": self.max_hp},
-            "opp_2_mana": {"low": 0, "high": self.max_mana},
-
-            "Randomness_factor": {"low": 0, "high": 1}
-        }
         
+        # Observation space (simplified and normalized)
         self.observation_space = spaces.Box(
-            low=np.array([dict_observation_one_ellement["low"] for dict_observation_one_ellement in self.Observation_dict.values()]),
-            high=np.array([dict_observation_one_ellement["high"] for dict_observation_one_ellement in self.Observation_dict.values()]),
+            low=-1.0, high=1.0, 
+            shape=(13,),
             dtype=np.float32
         )
-
-        self.agent = DQNAgent(state_size=self.observation_space.shape[0], action_size=self.action_space.n)
-
+        
+        # Create ONE shared agent for self-play
+        self.agent = DQNAgent(
+            state_size=self.observation_space.shape[0], 
+            action_size=self.action_space.n,
+            learning_rate=0.0003,
+            gamma=0.99
+        )
+        
         self.visualizer = Viz.Vizualizer("wled")
         self.reset()
-
+    
     def reset(self):
-        self.positions = {player_id: random.randint(0, self.strip_length) for player_id in self.player_ids}
-
+        """Reset environment to initial state"""
+        # Random positions, ensuring no overlap
+        positions = random.sample(range(self.strip_length), self.num_players)
+        self.positions = {self.player_ids[i]: positions[i] for i in range(self.num_players)}
+        
         # Initialize stats
         self.hp = {pid: self.max_hp for pid in self.player_ids}
         self.mana = {pid: self.max_mana for pid in self.player_ids}
         self.alive = {pid: True for pid in self.player_ids}
         self.shield_on_map = [False] * self.strip_length
-
-
+        
+        # History for animations
         self.history = []
-
-        # Step counter
         self.current_step = 0
-
-        # Get observations for all players
+        
+        # Get observations
         observations = {pid: self._get_observation(pid) for pid in self.player_ids}
         info = self._get_info()
         
         return observations, info
     
     def Episode(self, visualization=False):
+        """Run one complete episode"""
         observations, info = self.reset()
-
+        
         log_player_rewards = {pid: 0 for pid in self.player_ids}
         log_survival_times = {pid: 0 for pid in self.player_ids}
-
+        episode_stats = {
+            'total_damage_dealt': {pid: 0 for pid in self.player_ids},
+            'total_damage_taken': {pid: 0 for pid in self.player_ids},
+            'actions_taken': {pid: [] for pid in self.player_ids}
+        }
+        
         while self.current_step < self.max_steps:
-            observations, rewards, terminated, truncated, info, All_game_actions = self.all_step(observations)
+            # Get actions (ONE per player)
+            actions = {}
+            for player_id in self.player_ids:
+                if self.alive[player_id]:
+                    action_idx = self.agent.select_action(observations[player_id], training=self.is_train)
+                    actions[player_id] = action_idx
+                else:
+                    actions[player_id] = 0  # Default action for dead players
+            
+            # Execute step
+            next_observations, rewards, terminated, truncated, info, All_game_actions = self.step(actions)
+            
+            # Store transitions for training
+            if self.is_train:
+                for player_id in self.player_ids:
+                    if player_id in observations:  # Only if player was alive
+                        self.agent.store_transition(
+                            state=observations[player_id],
+                            action=actions[player_id],
+                            reward=rewards[player_id],
+                            next_state=next_observations[player_id],
+                            done=(not self.alive[player_id]) or terminated or truncated
+                        )
+                
+                # Train agent
+                loss = self.agent.train()
+                
+                # Soft update target network
+                if self.current_step % 4 == 0:
+                    self.agent.update_target_network()
+            
+            # Update observations
+            observations = next_observations
             self.current_step += 1
             
-
-            # LOG for each player and step
+            # Log rewards and survival
             for player_id in self.player_ids:
                 log_player_rewards[player_id] += rewards[player_id]
-            
                 if self.alive[player_id]:
                     log_survival_times[player_id] += 1
-        
-        if self.is_train:
-                
-            # 5️⃣ Mise à jour epsilon
-            self.agent.decay_epsilon()
-
-            if self.agent.training_step % 100 == 0:
-                self.agent.update_target_network()
-        if visualization != False:
-            if visualization == "Wled":
-                self.visualizer.show(All_game_actions, self.positions, self.shield_on_map)
-                
             
-        return log_player_rewards, log_survival_times, self.current_step, sum(self.alive.values())
-
-    def all_step(self, observations):
-
-        Dict_of_actions = {}
-        Dict_of_REAL_actions = {}
-        # Get actions
-        for player_id in self.player_ids:
-            Dict_of_REAL_actions[player_id] = self.agent.select_action(observations[player_id], training=self.is_train)
-            Dict_of_actions[player_id] = [self.actions_config[i]["name"] for i, v in enumerate(Dict_of_REAL_actions[player_id]) if v == 1 and i in self.actions_config]
-
-        rewards, terminated, All_game_actions = self.step_game(Dict_of_actions)
-
-        # Get observations
-        next_observations = {pid: self._get_observation(pid) for pid in self.player_ids}
-        truncated = self.current_step >= self.max_steps
-        info = self._get_info()
-
-        # Train if needed
+            if terminated or truncated:
+                break
+        
+        # Decay epsilon after episode
         if self.is_train:
-            done = terminated or truncated
-            for player_id in self.player_ids:
-                
-                self.agent.store_transition(
-                    state = observations[player_id],
-                    action = Dict_of_REAL_actions[player_id],
-                    reward = rewards[player_id],
-                    next_state = next_observations[player_id],
-                    done = not self.alive[player_id] or done
-                )
-
-                self.agent.train()
-
-        return observations, rewards, terminated, truncated, info, All_game_actions
+            self.agent.decay_epsilon()
+        
+        # Visualization
+        if visualization and visualization == "Wled":
+            self.visualizer.show(All_game_actions, self.positions, self.shield_on_map)
+        
+        return log_player_rewards, log_survival_times, self.current_step, sum(self.alive.values())
     
-    def step_game(self, Dict_of_actions):
+    def step(self, actions: Dict[str, int]):
+        """Execute one step with SINGLE action per player"""
         prev_hp = {pid: self.hp[pid] for pid in self.player_ids}
-        # Execute actions
-        rewards = {
-            player_id: 0
-            for player_id in self.player_ids
-        }
+        prev_positions = {pid: self.positions[pid] for pid in self.player_ids}
+        
+        rewards = {pid: 0 for pid in self.player_ids}
+        All_game_actions = {}
 
         Action_order = [
             "go_left",
@@ -195,50 +176,71 @@ class Combat1v1Env():
             "random_tp",
             "left_shield",
             "right_shield",
-            "punsh",
+            "punch",
             "lazer",
             "heal",
         ]
 
-        All_game_actions = {}
+        # Construire la liste (player_id, action_name)
+        actions_to_execute = []
 
-        for action in Action_order:
-            for player_id in self.player_ids:
-                if action in Dict_of_actions[player_id] and self.alive[player_id]:
-                    reward, accepted_action = self._execute_action(player_id, action)
-                    rewards[player_id] += reward
-                    if accepted_action != []:
-                        All_game_actions[player_id] = accepted_action[0]
+        for player_id in self.player_ids:
+            if not self.alive[player_id]:
+                continue
+
+            action_idx = actions[player_id]
+            action_name = self.actions_config[action_idx]["name"]
+            actions_to_execute.append((player_id, action_name))
+
+        # Trier par priorité
+        actions_to_execute.sort(key=lambda x: Action_order.index(x[1]))
+
+
+        # Exécuter dans l'ordre prioritaire
+        for player_id, action_name in actions_to_execute:
+
+            reward, accepted_action = self._execute_action(player_id, action_name)
+            rewards[player_id] += reward
+
+            if accepted_action:
+                All_game_actions[player_id] = accepted_action[0]
+
         
-        # Regenerate mana for alive players
+        # Regenerate mana
         for player_id in self.player_ids:
             if self.alive[player_id]:
                 self.mana[player_id] = min(self.max_mana, self.mana[player_id] + self.mana_regen)
         
-        # Check game end
-        alive_count = sum(self.alive.values())
-        terminated = alive_count <= 1 or self.current_step >= self.max_steps
-        
-        # Add damage-based rewards
+        # Calculate damage-based rewards (FIXED)
         for player_id in self.player_ids:
             if self.alive[player_id]:
-                damage_dealt = prev_hp[player_id] - self.hp[player_id]
-                rewards[player_id] += damage_dealt * 1.1
-        
-        # Add penalty for taking damage
-        for player_id in self.player_ids:
-            if self.alive[player_id]:
+                # Damage TAKEN (negative change in HP)
                 damage_taken = prev_hp[player_id] - self.hp[player_id]
                 if damage_taken > 0:
-                    rewards[player_id] -= damage_taken * 0.5  # Penalty for taking damage
-
-        if terminated:
-            # Victory bonus for survivors
-            for player_id in self.player_ids:
-                if self.alive[player_id]:
-                    rewards[player_id] += 100
+                    rewards[player_id] -= damage_taken * 0.5  # Penalty for being hit
+                
         
-        return rewards, terminated, All_game_actions
+        # Small penalty for time passing
+        for player_id in self.player_ids:
+            if self.alive[player_id]:
+                rewards[player_id] -= 0.1
+        
+        # Check termination
+        alive_count = sum(self.alive.values())
+        terminated = alive_count <= 1
+        
+        # Victory bonus
+        if terminated and alive_count == 1:
+            winner = [pid for pid in self.player_ids if self.alive[pid]][0]
+            rewards[winner] += 100
+        
+        # Get next observations
+        next_observations = {pid: self._get_observation(pid) for pid in self.player_ids}
+        truncated = self.current_step >= self.max_steps
+        info = self._get_info()
+        
+        return next_observations, rewards, terminated, truncated, info, All_game_actions
+
 
     def _get_observation(self, player_id):
         """Get observation for a specific player"""
@@ -277,8 +279,6 @@ class Combat1v1Env():
             closest_dist_opp_2, closest_dir_opp_2, closest_pid_opp_2 = self.strip_length / 2, 0, None
             opp_2_hp, opp_2_mana = 0, 0
 
-        Randomness_factor = random.uniform(0, 1)
-
         return np.array([
             self.hp[player_id] / self.max_hp, # my_hp
             self.mana[player_id] / self.max_mana, # my_mana
@@ -295,115 +295,110 @@ class Combat1v1Env():
             closest_dir_opp_2, # closest_dir_opp_2
             opp_2_hp / self.max_hp, # opp_2_hp
             opp_2_mana / self.max_mana, # opp_2_mana
-
-            Randomness_factor
         ])
-
+    
     def _execute_action(self, player_id, action):
+        """Execute action with proper validation"""
         accepted_action = []
-
+        
         if not self.alive[player_id]:
-            return 0
+            return 0, accepted_action
         
         reward = 0
-
+        mana_cost = self.actions_config_with_name[action].get("mana", 0)
         
-
-        if self.mana[player_id] < self.actions_config_with_name[action]["mana"]:
-            return reward - 2, accepted_action  # Invalid action penalty
-        else:
-            self.mana[player_id] -= self.actions_config_with_name[action]["mana"]
-
-            if action == "left":
-                self.positions[player_id] -= 1
-                if self.positions[player_id] < 0:
-                    self.positions[player_id] += self.strip_length - 1
-                accepted_action.append({"name": action})
-            elif action == "right":
-                self.positions[player_id] += 1
-                if self.positions[player_id] >= self.strip_length:
-                    self.positions[player_id] = 0
-                accepted_action.append({"name": action})
-            # Execute attacks
-            elif action in ["punsh", "lazer"]:
-                damage = self.actions_config_with_name[action]["damage"]
-                attack_range = self.actions_config_with_name[action]["range"]
-                
-                # Find all targets in range
-                targets_hit = []
-                for target_id in self.player_ids:
-                    if target_id != player_id and self.alive[target_id]:
-                        dist = Game_function._get_cyclic_distance(
-                            self.positions[player_id],
-                            self.positions[target_id],
-                            self.strip_length
-                        )
-                        dir = Game_function._get_direction(
-                            self.positions[player_id],
-                            self.positions[target_id],
-                            self.strip_length
-                        )
-                        shield_blocked = False
-                        pos_before_shield = 0
-                        for i in range(self.positions[player_id] + dir, self.positions[target_id] + dir, dir):
-                            if i < 0:
-                                i += self.strip_length
-                            if i >= self.strip_length:
-                                i -= self.strip_length
-                            if self.shield_on_map[i]:
-                                shield_blocked = True
-                                pos_before_shield = i - dir
-                                break
-                        if shield_blocked:
-                            accepted_action.append({"name": action, "shield_blocked": True, "pos_before_shield": pos_before_shield})
-                        elif dist <= attack_range:
-                            targets_hit.append(target_id)
-                            accepted_action.append({"name": action, "shield_blocked": False})
+        # Check mana
+        if self.mana[player_id] < mana_cost:
+            return -1, accepted_action  # Small penalty for invalid action
         
-                if targets_hit:
-                    # Hit someone!
-                    for target_id in targets_hit:
-                        self.hp[target_id] -= damage
-                        if self.hp[target_id] <= 0:
-                            self.alive[target_id] = False
-                            accepted_action.append({"name": "death", "Target": target_id})
-                            reward += 75  # Kill bonus
-                    reward += 10 * len(targets_hit)  # Hit reward
-                else:
-                    reward -= 20  # Miss penalty
+        self.mana[player_id] -= mana_cost
+        
+        # Movement
+        if action == "go_left":
+            self.positions[player_id] = (self.positions[player_id] - 1) % self.strip_length
+            accepted_action.append({"name": action})
+            reward += 0  # Neutral
+        
+        elif action == "go_right":
+            self.positions[player_id] = (self.positions[player_id] + 1) % self.strip_length
+            accepted_action.append({"name": action})
+            reward += 0  # Neutral
+        
+        # Attacks
+        elif action in ["punch", "lazer"]:
+            damage = self.actions_config_with_name[action]["damage"]
+            attack_range = self.actions_config_with_name[action]["range"]
+            
+            targets_hit = []
+            for target_id in self.player_ids:
+                if target_id != player_id and self.alive[target_id]:
+                    dist = Game_function._get_cyclic_distance(
+                        self.positions[player_id],
+                        self.positions[target_id],
+                        self.strip_length
+                    )
                     
-            if action == "left_shield":
-                if self.positions[player_id] - 1 < 0:
-                    self.shield_on_map[self.strip_length - 1] = True
-                else:
-                    self.shield_on_map[self.positions[player_id] - 1] = True
-                accepted_action.append({"name": action})
-            elif action == "right_shield":
-                if self.positions[player_id] + 1 >= self.strip_length:
-                    self.shield_on_map[0] = True
-                else:
-                    self.shield_on_map[self.positions[player_id] + 1] = True
-                accepted_action.append({"name": action})
-            elif action == "heal":
-                self.hp[player_id] += self.actions_config_with_name[action]["regen"]
-                if self.hp[player_id] > self.max_hp:
-                    self.hp[player_id] = self.max_hp
-                accepted_action.append({"name": action})
-            elif action == "random_tp":
-                tp_accepted = False
-                while not tp_accepted:
-                    new_pos = random.randint(0, self.strip_length - 1)
-                    if not self.shield_on_map[new_pos]:
-                        tp_accepted = True
-                self.positions[player_id] = new_pos
-                accepted_action.append({"name": action, "new_pos": new_pos})
+                    if dist <= attack_range:
+                        direction = Game_function._get_direction(
+                            self.positions[player_id],
+                            self.positions[target_id],
+                            self.strip_length
+                        )
+                        
+                        # Check shield blocking
+                        shield_blocked = False
+                        for i in range(1, int(dist) + 1):
+                            check_pos = (self.positions[player_id] + i * direction) % self.strip_length
+                            if self.shield_on_map[check_pos]:
+                                shield_blocked = True
+                                break
+                        
+                        if not shield_blocked:
+                            targets_hit.append(target_id)
+            
+            if targets_hit:
+                for target_id in targets_hit:
+                    self.hp[target_id] -= damage
+                    if self.hp[target_id] <= 0:
+                        self.alive[target_id] = False
+                        reward += 50  # Kill bonus
+                reward += 5 * len(targets_hit)  # Hit reward
+                accepted_action.append({"name": action, "hit": True})
             else:
-                # Rest
-                pass
+                reward -= 2  # Miss penalty
+                accepted_action.append({"name": action, "hit": False})
         
-
+        # Shields
+        elif action == "left_shield":
+            shield_pos = (self.positions[player_id] - 1) % self.strip_length
+            self.shield_on_map[shield_pos] = True
+            accepted_action.append({"name": action})
+            reward += 0
+        
+        elif action == "right_shield":
+            shield_pos = (self.positions[player_id] + 1) % self.strip_length
+            self.shield_on_map[shield_pos] = True
+            accepted_action.append({"name": action})
+            reward += 0
+        
+        # Heal
+        elif action == "heal":
+            heal_amount = self.actions_config_with_name[action]["regen"]
+            old_hp = self.hp[player_id]
+            self.hp[player_id] = min(self.max_hp, self.hp[player_id] + heal_amount)
+            actual_heal = self.hp[player_id] - old_hp
+            reward += actual_heal * 0.3  # Reward for effective healing
+            accepted_action.append({"name": action})
+        
+        # Teleport
+        elif action == "random_tp":
+            new_pos = random.randint(0, self.strip_length - 1)
+            self.positions[player_id] = new_pos
+            accepted_action.append({"name": action, "new_pos": new_pos})
+            reward += 0
+        
         return reward, accepted_action
-
+    
     def _get_info(self):
         """Return game state info"""
         return {
