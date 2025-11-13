@@ -55,10 +55,12 @@ class Combat1v1Env():
         # Action space: ONE action per step
         self.action_space = spaces.Discrete(len(self.actions_config))
         
+        self.lenght_observation = 13
+
         # Observation space (simplified and normalized)
         self.observation_space = spaces.Box(
             low=-1.0, high=1.0, 
-            shape=(13,),
+            shape=(self.lenght_observation,),
             dtype=np.float32
         )
         
@@ -220,10 +222,10 @@ class Combat1v1Env():
                     rewards[player_id] -= damage_taken * 0.5  # Penalty for being hit
                 
         
-        # Small penalty for time passing
+        # Small reward for being alive
         for player_id in self.player_ids:
             if self.alive[player_id]:
-                rewards[player_id] -= 0.1
+                rewards[player_id] += 0.1
         
         # Check termination
         alive_count = sum(self.alive.values())
@@ -245,7 +247,7 @@ class Combat1v1Env():
     def _get_observation(self, player_id):
         """Get observation for a specific player"""
         if not self.alive[player_id]:
-            return np.zeros(len(self.Observation_dict), dtype=np.float32)
+            return np.zeros(self.lenght_observation, dtype=np.float32)
         
         # Calculate average opponent HP
         alive_opponents = [pid for pid in self.player_ids if pid != player_id and self.alive[pid]]
